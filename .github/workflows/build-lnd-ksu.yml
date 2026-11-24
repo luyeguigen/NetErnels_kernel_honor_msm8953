@@ -110,9 +110,23 @@ jobs:
         run: |
           set -o pipefail
           make O=out ARCH=arm64 CROSS_COMPILE=/opt/tc/bin/aarch64-linux-android- \
-            -j"$(nproc)" CONFIG_NO_ERROR_ON_MISMATCH=y Image.gz 2>&1 | tail -120
-          ls -l out/arch/arm64/boot/
+            -j"$(nproc)" CONFIG_NO_ERROR_ON_MISMATCH=y Image.gz > /tmp/build.log 2>&1 || true
+          echo "===== 错误摘要 ====="
+          grep -nE "error:|fatal error:|Error [0-9]+$|No such file" /tmp/build.log | head -40 || echo "(无 error 行)"
+          echo "===== 日志尾部 ====="
+          tail -60 /tmp/build.log
+          echo "===== 产物 ====="
+          ls -l out/arch/arm64/boot/ || true
+          test -f out/arch/arm64/boot/Image.gz
           echo "IMG_SIZE=$(stat -c%s out/arch/arm64/boot/Image.gz)" | tee -a "$GITHUB_ENV"
+
+      - name: upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: warn
 
       - name: report
         run: |
