@@ -1,0 +1,125 @@
+name: build-lnd-ksu
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_ref:
+        description: 'KSU tag/commit (pinned to match manager)'
+        default: 'v4.2.0-rc3'
+        required: false
+      defconfig:
+        description: 'defconfig name under arch/arm64/configs'
+        default: 'merge_msm8953_64_defconfig'
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container: ubuntu:20.04
+    timeout-minutes: 350
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      KBUILD_BUILD_USER: luoyeguigen
+      KBUILD_BUILD_HOST: lnd-nov24
+      KSU_REF: ${{ inputs.ksu_ref }}
+      DEFCONFIG: ${{ inputs.defconfig }}
+    steps:
+      - name: deps
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev python3 \
+            git curl ca-certificates xz-utils zip cpio rsync
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: toolchain gcc-4.9 (LineageOS prebuilt)
+        run: |
+          mkdir -p /opt/tc
+          curl -sL --retry 3 -o /tmp/tc.tar.gz \
+            https://codeload.github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9/tar.gz/refs/heads/lineage-17.1
+          tar -xzf /tmp/tc.tar.gz -C /opt/tc --strip-components=1
+          /opt/tc/bin/aarch64-linux-android-gcc --version | head -1
+
+      - name: install KSU into kernel tree
+        run: |
+          set -x
+          curl -LSs https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh -o /tmp/ksu_setup.sh
+          sh /tmp/ksu_setup.sh "${KSU_REF}"
+          ls -l drivers/kernelsu | head -3
+          git -C KernelSU rev-list --count HEAD
+          git -C KernelSU describe --tags 2>/dev/null || true
+
+      - name: apply 3.18 patches
+        run: |
+          set -x
+          python3 .github/ksu/selinux_hide_fix.py || echo "WARN selinux_hide_fix failed"
+          python3 .github/ksu/fix_flask.py       || echo "WARN fix_flask failed"
+          python3 .github/ksu/insert_hooks.py    || echo "WARN insert_hooks failed"
+          python3 .github/ksu/exec_hook_fix.py   || echo "WARN exec_hook_fix failed"
+          echo "--- hook markers ---"
+          grep -c "ksu_handle_execveat" fs/exec.c || true
+          grep -c "ksu_handle_faccessat" fs/open.c || true
+          grep -c "ksu_handle_stat" fs/stat.c || true
+          grep -c "ksu_handle_sys_reboot" kernel/reboot.c || true
+
+      - name: configure
+        run: |
+          set -x
+          mkdir -p out
+          cp "arch/arm64/configs/${DEFCONFIG}" out/.config
+          sed -i \
+            -e 's/^CONFIG_HUAWEI_CFI=y/# CONFIG_HUAWEI_CFI is not set/' \
+            -e 's/^CONFIG_HUAWEI_CFI_TAG=.*/# CONFIG_HUAWEI_CFI_TAG is not set/' \
+            -e 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-LND-KSU"/' \
+            -e 's/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' \
+            -e 's/^# CONFIG_WLAN_FEATURE_11W is not set/CONFIG_WLAN_FEATURE_11W=y/' \
+            -e 's/^# CONFIG_QCOM_VOWIFI_11R is not set/CONFIG_QCOM_VOWIFI_11R=y/' \
+            -e 's/^# CONFIG_ENABLE_LINUX_REG is not set/CONFIG_ENABLE_LINUX_REG=y/' \
+            -e 's/^# CONFIG_WLAN_OFFLOAD_PACKETS is not set/CONFIG_WLAN_OFFLOAD_PACKETS=y/' \
+            -e 's/^# CONFIG_PRIMA_WLAN_LFR is not set/CONFIG_PRIMA_WLAN_LFR=y/' \
+            -e 's/^# CONFIG_PRIMA_WLAN_OKC is not set/CONFIG_PRIMA_WLAN_OKC=y/' \
+            -e 's/^# CONFIG_PRIMA_WLAN_11AC_HIGH_TP is not set/CONFIG_PRIMA_WLAN_11AC_HIGH_TP=y/' \
+            -e 's/^# CONFIG_NL80211_TESTMODE is not set/CONFIG_NL80211_TESTMODE=y/' \
+            out/.config
+          cat >> out/.config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y
+          CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y
+          CONFIG_KALLSYMS=y
+          CONFIG_KALLSYMS_ALL=y
+          CONFIG_KERNEL_GZIP=y
+          # CONFIG_KERNEL_LZ4 is not set
+          EOF
+          make O=out ARCH=arm64 olddefconfig
+          echo "--- key configs ---"
+          grep -E "^CONFIG_(KSU|KALLSYMS|KERNEL_GZIP|HUAWEI_CFI|LOCALVERSION)" out/.config || true
+
+      - name: build Image.gz
+        run: |
+          set -o pipefail
+          make O=out ARCH=arm64 CROSS_COMPILE=/opt/tc/bin/aarch64-linux-android- \
+            -j"$(nproc)" CONFIG_NO_ERROR_ON_MISMATCH=y Image.gz 2>&1 | tail -80
+          ls -l out/arch/arm64/boot/
+          echo "IMG_SIZE=$(stat -c%s out/arch/arm64/boot/Image.gz)" | tee -a "$GITHUB_ENV"
+
+      - name: report
+        run: |
+          N=$(git -C KernelSU rev-list --count HEAD)
+          echo "KSU commits=$N -> KSU_VERSION=$((30000 + N + 700))"
+          echo "Image.gz size=$IMG_SIZE bytes"
+          strings -a out/arch/arm64/boot/Image.gz | head -0 || true
+          grep -m1 "KernelSU" out/.config || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lnd-ksu-image
+          path: |
+            out/arch/arm64/boot/Image.gz
+            out/.config
+          if-no-files-found: error
