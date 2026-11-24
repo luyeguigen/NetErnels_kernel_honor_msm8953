@@ -109,11 +109,12 @@ jobs:
       - name: fix prima include flags
         run: |
           K=drivers/staging/prima/Kbuild
-          # 原树把 -I 路径塞进 EXTRA_CFLAGS，现代 kbuild 不认，改用 ccflags-y
+          # 1) -I 路径原本相对 objtree，O=out 构建时必须改成相对 srctree
+          sed -i 's|^\([[:space:]]*\)WLAN_ROOT := drivers/staging/prima$|\1WLAN_ROOT := $(srctree)/drivers/staging/prima|' "$K"
+          # 2) 原树把 -I 塞进 EXTRA_CFLAGS，现代 kbuild 不认，改用 ccflags-y
           grep -qF 'ccflags-y += $(INCS)' "$K" || echo 'ccflags-y += $(INCS)' >> "$K"
           grep -qF 'ccflags-y += $(CDEFINES)' "$K" || echo 'ccflags-y += $(CDEFINES)' >> "$K"
-          tail -6 "$K"
-          grep -n "BAP_INC :=" "$K"
+          grep -nE "WLAN_ROOT :=|ccflags-y" "$K"
 
       - name: build Image.gz
         run: |
