@@ -117,7 +117,9 @@ jobs:
           grep -qF 'subdir-ccflags-y += $(CDEFINES)' "$K" || echo 'subdir-ccflags-y += $(CDEFINES)' >> "$K"
           # 3) 兜底：把 BAP 两个头文件放到 HDD/inc，避免引号包含解析失败
           cp -n drivers/staging/prima/CORE/BAP/inc/*.h drivers/staging/prima/CORE/HDD/inc/ 2>/dev/null || true
-          grep -nE "WLAN_ROOT :=|subdir-ccflags-y" "$K"
+          # 4) SME 里无条件调用 btampEstablishLogLinkHdlr，必须让 BAP 参与编译
+          sed -i 's/CONFIG_PRIMA_WLAN_BTAMP := n/CONFIG_PRIMA_WLAN_BTAMP := y/' "$K"
+          grep -nE "WLAN_ROOT :=|subdir-ccflags-y|CONFIG_PRIMA_WLAN_BTAMP :=" "$K"
 
       - name: build Image.gz
         run: |
