@@ -106,6 +106,15 @@ jobs:
           echo "--- key configs ---"
           grep -E "^CONFIG_(KSU|KALLSYMS|KERNEL_GZIP|HUAWEI_CFI|LOCALVERSION)" out/.config || true
 
+      - name: fix prima include flags
+        run: |
+          K=drivers/staging/prima/Kbuild
+          # 原树把 -I 路径塞进 EXTRA_CFLAGS，现代 kbuild 不认，改用 ccflags-y
+          grep -qF 'ccflags-y += $(INCS)' "$K" || echo 'ccflags-y += $(INCS)' >> "$K"
+          grep -qF 'ccflags-y += $(CDEFINES)' "$K" || echo 'ccflags-y += $(CDEFINES)' >> "$K"
+          tail -6 "$K"
+          grep -n "BAP_INC :=" "$K"
+
       - name: build Image.gz
         run: |
           set -o pipefail
