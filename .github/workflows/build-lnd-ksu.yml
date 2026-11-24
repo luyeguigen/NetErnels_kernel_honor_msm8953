@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-22.04
     container: ubuntu:20.04
     timeout-minutes: 350
+    defaults:
+      run:
+        shell: bash
     env:
       ARCH: arm64
       SUBARCH: arm64
@@ -104,7 +107,7 @@ jobs:
         run: |
           set -o pipefail
           make O=out ARCH=arm64 CROSS_COMPILE=/opt/tc/bin/aarch64-linux-android- \
-            -j"$(nproc)" CONFIG_NO_ERROR_ON_MISMATCH=y Image.gz 2>&1 | tail -80
+            -j"$(nproc)" CONFIG_NO_ERROR_ON_MISMATCH=y Image.gz 2>&1 | tail -120
           ls -l out/arch/arm64/boot/
           echo "IMG_SIZE=$(stat -c%s out/arch/arm64/boot/Image.gz)" | tee -a "$GITHUB_ENV"
 
