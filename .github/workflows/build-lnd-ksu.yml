@@ -106,20 +106,49 @@ jobs:
           echo "--- key configs ---"
           grep -E "^CONFIG_(KSU|KALLSYMS|KERNEL_GZIP|HUAWEI_CFI|LOCALVERSION)" out/.config || true
 
-      - name: fix prima include flags
+      - name: fix prima build
         run: |
-          K=drivers/staging/prima/Kbuild
-          # 1) -I 路径原本相对 objtree，O=out 构建时必须改成相对 srctree
-          sed -i 's|^\([[:space:]]*\)WLAN_ROOT := drivers/staging/prima$|\1WLAN_ROOT := $(srctree)/drivers/staging/prima|' "$K"
-          # 2) 原树把 -I 塞进 EXTRA_CFLAGS，现代 kbuild 不认；
-          #    且子目录（CORE/HDD/src 等）需要 subdir-ccflags-y 才继承
-          grep -qF 'subdir-ccflags-y += $(INCS)' "$K" || echo 'subdir-ccflags-y += $(INCS)' >> "$K"
-          grep -qF 'subdir-ccflags-y += $(CDEFINES)' "$K" || echo 'subdir-ccflags-y += $(CDEFINES)' >> "$K"
-          # 3) 兜底：把 BAP 两个头文件放到 HDD/inc，避免引号包含解析失败
+          python3 - <<'PY'
+          import io, os
+
+          K = 'drivers/staging/prima/Kbuild'
+          s = io.open(K, encoding='utf-8', errors='replace').read()
+
+          # 1) -I 路径原本相对 objtree，O=out 构建必须改成相对 srctree
+          if 'WLAN_ROOT := $(srctree)/drivers/staging/prima' not in s:
+              s = s.replace('WLAN_ROOT := drivers/staging/prima',
+                            'WLAN_ROOT := $(srctree)/drivers/staging/prima')
+
+          # 2) 原树把 -I 塞进 EXTRA_CFLAGS，现代 kbuild 不认；子目录要靠 subdir- 前缀继承
+          if 'subdir-ccflags-y += $(INCS)' not in s:
+              s += 'subdir-ccflags-y += $(INCS)\n'
+          if 'subdir-ccflags-y += $(CDEFINES)' not in s:
+              s += 'subdir-ccflags-y += $(CDEFINES)\n'
+
+          # 3) SME 无条件调用 btampEstablishLogLinkHdlr，但本树没有 BAP 实现，
+          #    且 bap_hdd_main.c 用的是旧版 HCI API（hci_recv_frame 参数对不上）。
+          #    保持 BTAMP 关闭，补一个空实现满足链接。
+          if 'ksu_bap_stub.o' not in s:
+              s = s.replace('$(MODNAME)-y := $(OBJS)',
+                            'OBJS += ksu_bap_stub.o\n$(MODNAME)-y := $(OBJS)', 1)
+
+          io.open(K, 'w', encoding='utf-8').write(s)
+          print('Kbuild patched')
+
+          stub = 'drivers/staging/prima/ksu_bap_stub.c'
+          io.open(stub, 'w', encoding='utf-8').write(
+              '/* BTAMP 实现缺失，SME 无条件调用此符号；空实现足以链接 */\n'
+              'long btampEstablishLogLinkHdr(void *p) { return 0; }\n'
+              'long btampEstablishLogLinkHdlr(void *pSirMsg)\n'
+              '{\n'
+              '\t(void)pSirMsg;\n'
+              '\treturn 0;\n'
+              '}\n')
+          print('stub written')
+          PY
           cp -n drivers/staging/prima/CORE/BAP/inc/*.h drivers/staging/prima/CORE/HDD/inc/ 2>/dev/null || true
-          # 4) SME 里无条件调用 btampEstablishLogLinkHdlr，必须让 BAP 参与编译
-          sed -i 's/CONFIG_PRIMA_WLAN_BTAMP := n/CONFIG_PRIMA_WLAN_BTAMP := y/' "$K"
-          grep -nE "WLAN_ROOT :=|subdir-ccflags-y|CONFIG_PRIMA_WLAN_BTAMP :=" "$K"
+          grep -nE "WLAN_ROOT :=|subdir-ccflags-y|ksu_bap_stub|CONFIG_PRIMA_WLAN_BTAMP :=" drivers/staging/prima/Kbuild
+          cat drivers/staging/prima/ksu_bap_stub.c
 
       - name: build Image.gz
         run: |
