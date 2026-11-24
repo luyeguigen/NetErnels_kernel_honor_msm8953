@@ -35,6 +35,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential bc bison flex libssl-dev libelf-dev python3 \
             git curl ca-certificates xz-utils zip cpio rsync
+          ln -sf /usr/bin/python3 /usr/bin/python
 
       - uses: actions/checkout@v4
         with:
