@@ -81,7 +81,8 @@ jobs:
           sed -i \
             -e 's/^CONFIG_HUAWEI_CFI=y/# CONFIG_HUAWEI_CFI is not set/' \
             -e 's/^CONFIG_HUAWEI_CFI_TAG=.*/# CONFIG_HUAWEI_CFI_TAG is not set/' \
-            -e 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-LND-KSU"/' \
+            -e 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-LND-KSU-P"/' \
+            -e 's/^# CONFIG_SECURITY_SELINUX_DEVELOP is not set/CONFIG_SECURITY_SELINUX_DEVELOP=y/' \
             -e 's/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' \
             -e 's/^# CONFIG_WLAN_FEATURE_11W is not set/CONFIG_WLAN_FEATURE_11W=y/' \
             -e 's/^# CONFIG_QCOM_VOWIFI_11R is not set/CONFIG_QCOM_VOWIFI_11R=y/' \
@@ -102,9 +103,39 @@ jobs:
           CONFIG_KERNEL_GZIP=y
           # CONFIG_KERNEL_LZ4 is not set
           EOF
+          grep -q '^CONFIG_SECURITY_SELINUX_DEVELOP=y' out/.config \
+            || echo 'CONFIG_SECURITY_SELINUX_DEVELOP=y' >> out/.config
           make O=out ARCH=arm64 olddefconfig
           echo "--- key configs ---"
-          grep -E "^CONFIG_(KSU|KALLSYMS|KERNEL_GZIP|HUAWEI_CFI|LOCALVERSION)" out/.config || true
+          grep -E "^CONFIG_(KSU|KALLSYMS|KERNEL_GZIP|HUAWEI_CFI|LOCALVERSION|SECURITY_SELINUX_DEVELOP)" out/.config || true
+
+      - name: allow root to setenforce (permissive for debugging)
+        run: |
+          python3 - <<'PY'
+          import io
+
+          K = 'security/selinux/selinuxfs.c'
+          s = io.open(K, encoding='utf-8', errors='replace').read()
+
+          if '<linux/cred.h>' not in s:
+              s = s.replace('#include <linux/uaccess.h>',
+                            '#include <linux/uaccess.h>\n#include <linux/cred.h>', 1)
+
+          old = ("\t\tlength = task_has_security(current, SECURITY__SETENFORCE);\n"
+                 "\t\tif (length)\n"
+                 "\t\t\tgoto out;")
+          new = ("\t\tlength = task_has_security(current, SECURITY__SETENFORCE);\n"
+                 "\t\t/* permit uid 0 to switch enforcing state for debugging */\n"
+                 "\t\tif (length && !(new_value == 0 && current_euid().val == 0))\n"
+                 "\t\t\tgoto out;\n"
+                 "\t\tlength = 0;")
+
+          assert s.count(old) == 1, 'anchor count=%d' % s.count(old)
+          s = s.replace(old, new, 1)
+          io.open(K, 'w', encoding='utf-8').write(s)
+          print('patched sel_write_enforce')
+          PY
+          grep -n "current_euid().val" security/selinux/selinuxfs.c
 
       - name: fix prima build
         run: |
