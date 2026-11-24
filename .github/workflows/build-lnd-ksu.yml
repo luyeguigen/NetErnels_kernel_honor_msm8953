@@ -33,9 +33,11 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev python3 \
+            build-essential bc bison flex libssl-dev libelf-dev python3 python2 \
             git curl ca-certificates xz-utils zip cpio rsync
-          ln -sf /usr/bin/python3 /usr/bin/python
+          # gcc4.9 wrapper 用 #!/usr/bin/python；内核 scripts/gcc-wrapper.py 用 python2
+          ln -sf /usr/bin/python2 /usr/bin/python
+          python --version
 
       - uses: actions/checkout@v4
         with:
